@@ -503,32 +503,67 @@ function newBK(pkg) {
     services: new Set(['Video Shoot', 'Photography']), addons: new Set(['Highlight reel']),
     crew: { 'Photographer': 1, 'Videographer': 1, 'Drone Operator': 0, 'Assistant / Light': 1, 'Editor': 1 },
     discount: 5, discType: '%', vat: false, advance: 50000, type: 'Wedding',
+    overrides: {},   // manual price per line key (admin edit over regular price)
+    custom: [],      // extra items added by admin: { label, price }
   };
   if (pkg) {
     const P = DB.packages.find(x => x.id === pkg);
     if (P) { BK.pkg = P; BK.services = new Set(['Video Shoot', 'Photography', 'Drone']); BK.addons = new Set(['Highlight reel', 'Color grading']); BK.crew = { 'Photographer': 2, 'Videographer': 2, 'Drone Operator': 1, 'Assistant / Light': 1, 'Editor': 1 }; BK.discount = 0; }
   }
 }
-function bkTotals() {
+/* Each line: { key, label, reg (regular price), price (final), edited, custom } */
+function bkLines() {
   const days = Math.max(1, BK.sessions.length);
-  const lines = [];
-  DB.services.filter(s => BK.services.has(s.name)).forEach(s => lines.push([s.name + (s.unit === 'per day' ? ` × ${days} day` : ''), s.price * (s.unit === 'per day' ? days : 1)]));
-  DB.addons.filter(a => BK.addons.has(a.name)).forEach(a => lines.push([a.name, a.price]));
-  const crewTot = DB.crewRates.reduce((s, r) => s + (BK.crew[r.role] || 0) * r.rate * (r.role === 'Editor' ? 1 : days), 0);
-  if (crewTot) lines.push([`Crew (${Object.values(BK.crew).reduce((a, b) => a + b, 0)} people)`, crewTot]);
-  let sub = lines.reduce((s, l) => s + l[1], 0);
-  if (BK.pkg) { lines.length = 0; lines.push([BK.pkg.name + ' package', BK.pkg.price]); sub = BK.pkg.price; }
+  const base = [];
+  if (BK.pkg) base.push(['pkg', BK.pkg.name + ' package', BK.pkg.price]);
+  else {
+    DB.services.filter(s => BK.services.has(s.name)).forEach(s => base.push(['svc:' + s.name, s.name + (s.unit === 'per day' ? ` × ${days} day${days > 1 ? 's' : ''}` : ''), s.price * (s.unit === 'per day' ? days : 1)]));
+    DB.addons.filter(a => BK.addons.has(a.name)).forEach(a => base.push(['add:' + a.name, a.name, a.price]));
+    const crewTot = DB.crewRates.reduce((s, r) => s + (BK.crew[r.role] || 0) * r.rate * (r.role === 'Editor' ? 1 : days), 0);
+    if (crewTot) base.push(['crew', `Crew (${Object.values(BK.crew).reduce((a, b) => a + b, 0)} people)`, crewTot]);
+  }
+  const lines = base.map(([key, label, reg]) => {
+    const o = BK.overrides[key];
+    return { key, label, reg, price: o ?? reg, edited: o != null && o !== reg };
+  });
+  BK.custom.forEach((c, i) => lines.push({ key: 'custom:' + i, label: c.label || 'Custom item', reg: 0, price: +c.price || 0, edited: false, custom: true }));
+  return lines;
+}
+function bkTotals() {
+  const lines = bkLines();
+  const sub = lines.reduce((s, l) => s + l.price, 0);
+  const regular = lines.reduce((s, l) => s + (l.custom ? l.price : l.reg), 0);
   const disc = BK.discType === '%' ? sub * BK.discount / 100 : +BK.discount;
   const vat = BK.vat ? (sub - disc) * .05 : 0;
-  return { lines, sub, disc, vat, total: Math.round(sub - disc + vat) };
+  return { lines, sub, regular, disc, vat, total: Math.round(sub - disc + vat) };
+}
+function bkPriceTable() {
+  const lines = bkLines();
+  return `
+    <div class="price-row head"><span>Item</span><span class="right">Regular price</span><span class="right">Your price (৳)</span><span></span></div>
+    ${lines.map(l => l.custom ? `
+    <div class="price-row custom">
+      <input class="input sm" value="${esc(BK.custom[+l.key.split(':')[1]].label)}" placeholder="e.g. Extra travel charge" data-bkcustom="label" data-i="${l.key.split(':')[1]}">
+      <span class="right faint small">Custom</span>
+      <input class="input sm num right" type="number" value="${l.price}" data-bkcustom="price" data-i="${l.key.split(':')[1]}">
+      <button type="button" class="btn sm icon ghost danger" title="Remove" data-act="bk-custom-del" data-i="${l.key.split(':')[1]}">${ic('trash')}</button>
+    </div>` : `
+    <div class="price-row ${l.edited ? 'edited' : ''}">
+      <span class="strong small">${esc(l.label)}${l.edited ? ' <span class="tag">Edited</span>' : ''}</span>
+      <span class="right num small ${l.edited ? 'strike' : 'muted'}">${tk(l.reg)}</span>
+      <input class="input sm num right" type="number" min="0" value="${l.price}" data-bkprice="${esc(l.key)}">
+      ${l.edited ? `<button type="button" class="btn sm icon ghost" title="Reset to regular price" data-act="bk-price-reset" data-k="${esc(l.key)}">${ic('refresh')}</button>` : '<span></span>'}
+    </div>`).join('') || '<div class="empty small">Select a service to see pricing.</div>'}
+    <button type="button" class="btn sm" style="margin-top:12px;border-style:dashed" data-act="bk-custom-add">${ic('plus')} Add custom item</button>`;
 }
 function bkSummary() {
   const t = bkTotals();
   return `<div class="summary-hero"><img src="assets/logo-mark.png" alt=""><div class="muted small strong">Total budget</div><div class="big num">${tk(t.total)}</div>
       <div class="muted small">${BK.sessions.length} session${BK.sessions.length > 1 ? 's' : ''} · ${BK.services.size} services · ${BK.addons.size} add-ons</div></div>
     <div class="card-b">
-      ${t.lines.map(l => `<div class="ln"><span class="muted">${l[0]}</span><span class="num strong">${tk(l[1])}</span></div>`).join('')}
+      ${t.lines.map(l => `<div class="ln"><span class="muted">${esc(l.label)}${l.edited ? ' <span class="tag" style="padding:0 5px">Edited</span>' : ''}</span><span class="num strong">${l.edited ? `<s class="faint" style="font-weight:500;margin-right:6px">${tk(l.reg)}</s>` : ''}${tk(l.price)}</span></div>`).join('')}
       <div class="ln" style="border-top:1px solid var(--line-2);margin-top:6px;padding-top:10px"><span>Subtotal</span><span class="num strong">${tk(t.sub)}</span></div>
+      ${t.sub !== t.regular ? `<div class="ln"><span class="muted">vs regular price ${tk(t.regular)}</span><span class="num strong" style="color:${t.sub < t.regular ? 'var(--amber)' : 'var(--green)'}">${t.sub < t.regular ? '− ' : '+ '}${tk(Math.abs(t.sub - t.regular))}</span></div>` : ''}
       ${t.disc ? `<div class="ln"><span class="muted">Discount ${BK.discType === '%' ? '(' + BK.discount + '%)' : ''}</span><span class="num" style="color:var(--green)">− ${tk(t.disc)}</span></div>` : ''}
       ${t.vat ? `<div class="ln"><span class="muted">VAT 5%</span><span class="num">${tk(t.vat)}</span></div>` : ''}
       <div class="ln tot"><span>Total</span><span class="num">${tk(t.total)}</span></div>
@@ -582,7 +617,10 @@ PAGES.booking_new = (parts, q) => {
         <div class="field full"><label>What will be delivered</label><textarea class="input" style="min-height:70px">1 cinematic highlight (4–5 min)\n300 edited photos\nFull ceremony film</textarea></div>
         <div class="field"><label>Editing deadline</label><input class="input" type="date" value="2026-12-28"></div>
         <div class="field"><label>Final delivery date</label><input class="input" type="date" value="2027-01-05"></div></div>`)}
-      ${sec(10, 'Pricing & advance', 'Discount, VAT and the initial payment', `<div class="form-grid">
+      ${sec(10, 'Pricing & advance', 'Regular prices fill in automatically — type your own price on any item to override it', `
+        <div id="bk-price-table" class="price-table">${bkPriceTable()}</div>
+        <div style="height:1px;background:var(--line-2);margin:18px 0"></div>
+        <div class="form-grid">
         <div class="field"><label>Discount</label><div class="row" style="gap:6px"><input class="input" type="number" value="${BK.discount}" data-bkp="discount"><div class="seg"><button type="button" class="${BK.discType === '%' ? 'on' : ''}" data-act="bk-disc" data-t="%">%</button><button type="button" class="${BK.discType === '৳' ? 'on' : ''}" data-act="bk-disc" data-t="৳">৳</button></div></div></div>
         <div class="field"><label>VAT / Tax</label><div class="row" style="height:40px"><span class="toggle ${BK.vat ? 'on' : ''}" data-act="bk-vat"></span><span class="muted small">Add 5% VAT</span></div></div>
         <div class="field"><label>Advance payment received</label><input class="input" type="number" value="${BK.advance}" data-bkp="advance"></div>
@@ -593,7 +631,8 @@ PAGES.booking_new = (parts, q) => {
       <div class="col" style="gap:8px;margin-top:14px"><button class="btn primary block" data-act="bk-save">${ic('check')} Create booking</button><button class="btn block" data-act="bk-quote">${ic('file')} Create & send quotation</button></div></div>
   </div>`;
 };
-const bkRefresh = () => { const s = $('#bk-summary'); if (s) s.innerHTML = bkSummary(); DB.crewRates.forEach(r => { const k = r.role.replace(/\W/g, ''); const a = $('#crew-' + k), b = $('#crewt-' + k); if (a) a.textContent = BK.crew[r.role]; if (b) b.textContent = tk(BK.crew[r.role] * r.rate * (r.role === 'Editor' ? 1 : BK.sessions.length)); }); };
+const bkTableRefresh = () => { const t = $('#bk-price-table'); if (t) t.innerHTML = bkPriceTable(); };
+const bkRefresh = (table = true) => { if (table) bkTableRefresh(); const s = $('#bk-summary'); if (s) s.innerHTML = bkSummary(); DB.crewRates.forEach(r => { const k = r.role.replace(/\W/g, ''); const a = $('#crew-' + k), b = $('#crewt-' + k); if (a) a.textContent = BK.crew[r.role]; if (b) b.textContent = tk(BK.crew[r.role] * r.rate * (r.role === 'Editor' ? 1 : BK.sessions.length)); }); };
 ACT['bk-svc'] = el => { const n = el.dataset.n; BK.services.has(n) ? BK.services.delete(n) : BK.services.add(n); el.classList.toggle('on'); bkRefresh(); };
 ACT['bk-addon'] = el => { const n = el.dataset.n, on = !BK.addons.has(n); on ? BK.addons.add(n) : BK.addons.delete(n); el.classList.toggle('on', on); el.firstElementChild.outerHTML = ic(on ? 'check' : 'plus'); bkRefresh(); };
 ACT['bk-crew'] = el => { const r = el.dataset.r; BK.crew[r] = Math.max(0, BK.crew[r] + +el.dataset.d); bkRefresh(); };
@@ -607,5 +646,13 @@ ACT['bk-quote'] = () => { toast('Quotation Q-2026-0063 created'); setTimeout(() 
 document.addEventListener('input', e => {
   const el = e.target;
   if (el.dataset.bk && BK) { BK.sessions[+el.dataset.i][el.dataset.bk] = el.value; }
-  if (el.dataset.bkp && BK) { BK[el.dataset.bkp] = +el.value || 0; bkRefresh(); }
+  if (el.dataset.bkp && BK) { BK[el.dataset.bkp] = +el.value || 0; bkRefresh(false); }
+  // Manual price override — keep focus in the input, only refresh the summary while typing
+  if (el.dataset.bkprice && BK) { BK.overrides[el.dataset.bkprice] = el.value === '' ? 0 : Math.max(0, +el.value); bkRefresh(false); }
+  if (el.dataset.bkcustom && BK) { const c = BK.custom[+el.dataset.i]; c[el.dataset.bkcustom] = el.dataset.bkcustom === 'price' ? +el.value || 0 : el.value; bkRefresh(false); }
 });
+// After the admin leaves a price field, redraw the table so "Edited" + reset button appear
+document.addEventListener('change', e => { if (BK && (e.target.dataset.bkprice || e.target.dataset.bkcustom)) bkTableRefresh(); });
+ACT['bk-price-reset'] = el => { delete BK.overrides[el.dataset.k]; bkRefresh(); toast('Price reset to regular'); };
+ACT['bk-custom-add'] = () => { BK.custom.push({ label: '', price: 0 }); bkRefresh(); $$('[data-bkcustom="label"]').pop()?.focus(); };
+ACT['bk-custom-del'] = el => { BK.custom.splice(+el.dataset.i, 1); bkRefresh(); };

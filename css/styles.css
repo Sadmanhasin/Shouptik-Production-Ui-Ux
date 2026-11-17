@@ -669,3 +669,15 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; min-height:
   body { background: #fff; } .paper { box-shadow: none; border: 0; }
 }
 @media (max-width: 900px) { #set-grid { grid-template-columns: minmax(0,1fr) !important; } .set-nav { flex-direction: row; overflow-x: auto; } .set-nav a { white-space: nowrap; } }
+
+/* Editable item-wise pricing (New Booking → Pricing) */
+.price-row { display: grid; grid-template-columns: minmax(0,1fr) 120px 150px 32px; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line-2); }
+.price-row.head { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); padding-top: 0; }
+.price-row .input.sm { width: 100%; height: 36px; }
+.price-row.edited .input { border-color: var(--sage-600); background: var(--sage-50); font-weight: 700; }
+.price-row.custom .input { background: var(--surface-2); }
+.strike { text-decoration: line-through; color: var(--faint); }
+@media (max-width: 640px) {
+  .price-row { grid-template-columns: minmax(0,1fr) 110px 32px; }
+  .price-row > :nth-child(2) { display: none; }
+}
